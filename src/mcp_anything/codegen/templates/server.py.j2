@@ -2,6 +2,12 @@
 
 import os
 
+{% if design.enable_dotenv %}
+# Load .env file before any configuration
+from dotenv import load_dotenv
+load_dotenv()
+{% endif %}
+
 from mcp.server.fastmcp import FastMCP
 
 server = FastMCP("{{ design.server_name }}")

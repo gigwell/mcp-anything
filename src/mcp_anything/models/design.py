@@ -115,4 +115,5 @@ class ServerDesign(BaseModel):
     http_host: str = "0.0.0.0"
     http_port: int = 8000
     enable_telemetry: bool = False
+    enable_dotenv: bool = True  # Load .env file at server startup
     generate_agents_md: bool = True

@@ -16,6 +16,9 @@ dependencies = [
 {% for dep in design.dependencies %}
     "{{ dep }}",
 {% endfor %}
+{% if design.enable_dotenv %}
+    "python-dotenv>=1.0.0",
+{% endif %}
 ]
 
 [project.urls]
