@@ -133,9 +133,10 @@ _BARE_PARAM_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 # Class-level @Path("/api/...") — matches class, interface, or abstract class
+# Note: Annotations may have trailing comments like @Timeout(1000) // comment with )
 _JAXRS_CLASS_PATH_RE = re.compile(
-    r'@Path\s*\(\s*["\']([^"\']*)["\'].*?\)\s+'
-    r'(?:@\w+(?:\s*\([^)]*\))?\s+)*'  # skip other class-level annotations
+    r'@Path\s*\(\s*["\']([^"\']*)["\']\s*\)\s*\n'
+    r'(?:@\w+[^\n]*\n)*'  # Skip entire annotation lines (comments may contain ')')
     r'(?:public\s+)?(?:abstract\s+)?(?:class|interface)\s+(\w+)',
     re.DOTALL,
 )
@@ -145,7 +146,7 @@ _JAXRS_CLASS_PATH_RE = re.compile(
 _JAXRS_METHOD_RE = re.compile(
     r'@(GET|POST|PUT|DELETE|PATCH)\b'
     r'(?:\s+@Path\s*\(\s*["\']([^"\']*)["\'].*?\))?'  # optional @Path
-    r'(?:\s+@(?:Consumes|Produces)\s*\([^)]*\))*'  # skip @Consumes/@Produces
+    r'(?:\s+@\w+(?:\s*\([^)]*\))?\s+)*'  # skip any intervening annotations
     r'\s+'
     r'(?:public\s+)?'
     r'([\w<>,\s]+?)'  # return type
@@ -211,9 +212,11 @@ _KOTLIN_SPRING_PARAM_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 # Class-level @Path for Kotlin: annotation + 'class ClassName'
+# Note: Annotations may have trailing comments like @Timeout(1000) // comment with )
+# so we match entire lines until newline
 _KOTLIN_JAXRS_CLASS_PATH_RE = re.compile(
-    r'@Path\s*\(\s*["\']([^"\']*)["\'].*?\)\s+'
-    r'(?:@\w+(?:\s*\([^)]*\))?\s+)*'
+    r'@Path\s*\(\s*["\']([^"\']*)["\']\s*\)\s*\n'
+    r'(?:@\w+[^\n]*\n)*'  # Skip entire annotation lines (comments may contain ')')
     r'(?:open\s+)?class\s+(\w+)',
     re.DOTALL,
 )
@@ -222,7 +225,7 @@ _KOTLIN_JAXRS_CLASS_PATH_RE = re.compile(
 _KOTLIN_JAXRS_METHOD_RE = re.compile(
     r'@(GET|POST|PUT|DELETE|PATCH)\b'
     r'(?:\s+@Path\s*\(\s*["\']([^"\']*)["\'].*?\))?'
-    r'(?:\s+@(?:Consumes|Produces)\s*\([^)]*\))*'
+    r'(?:\s+@\w+(?:\s*\([^)]*\))?\s+)*'  # skip any intervening annotations
     r'\s+'
     r'(?:override\s+)?fun\s+'
     r'(\w+)'  # method name
