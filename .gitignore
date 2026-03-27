@@ -14,3 +14,4 @@ venv/
 *.so
 .DS_Store
 mcp-anything-manifest.json
+.factory

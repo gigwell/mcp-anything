@@ -1,5 +1,6 @@
-"""LLM-assisted semantic analysis using Claude API."""
+"""LLM-assisted semantic analysis using configurable LLM provider."""
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -73,14 +74,11 @@ async def llm_analyze(
     files: list[FileInfo],
     ipc_mechanisms: list[IPCMechanism],
 ) -> Optional[AnalysisResult]:
-    """Use Claude API to semantically analyze the codebase.
+    """Use configured LLM to semantically analyze the codebase.
 
-    Returns None if anthropic is not installed or API call fails.
+    Returns None if LLM call fails.
     """
-    try:
-        import anthropic
-    except ImportError:
-        return None
+    from mcp_anything.llm import complete
 
     # Gather code samples from entry points and API surfaces
     code_samples: dict[str, str] = {}
@@ -98,16 +96,7 @@ async def llm_analyze(
     prompt = _build_evidence_prompt(app_name, files, ipc_mechanisms, code_samples)
 
     try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        import json
-
-        text = response.content[0].text
+        text = complete(prompt, max_tokens=4096)
         # Strip markdown code fences if present
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0]

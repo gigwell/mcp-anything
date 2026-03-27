@@ -415,12 +415,9 @@ def _generate_resources(analysis: AnalysisResult) -> list[ResourceSpec]:
     return resources
 
 
-async def _llm_design(analysis: AnalysisResult) -> Optional[ServerDesign]:
-    """Use Claude API for design decisions."""
-    try:
-        import anthropic
-    except ImportError:
-        return None
+async def _llm_design(analysis: AnalysisResult) -> Optional[dict]:
+    """Use configured LLM for design decisions."""
+    from mcp_anything.llm import complete
 
     caps_summary = json.dumps(
         [{"name": c.name, "description": c.description, "category": c.category} for c in analysis.capabilities],
@@ -438,13 +435,7 @@ Suggest:
 Return JSON with "tool_modules" and "resources" keys only."""
 
     try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text
+        text = complete(prompt, max_tokens=2048)
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0]
         return json.loads(text)
@@ -522,11 +513,8 @@ def _make_run_cli_tool(analysis: AnalysisResult) -> Optional[ToolSpec]:
 async def _enhance_descriptions_with_llm(
     tools: list[ToolSpec], app_name: str
 ) -> list[ToolSpec]:
-    """Use Claude to rewrite tool descriptions to be more useful for AI agents."""
-    try:
-        import anthropic
-    except ImportError:
-        return tools
+    """Use configured LLM to rewrite tool descriptions to be more useful for AI agents."""
+    from mcp_anything.llm import complete
 
     tool_summaries = []
     for t in tools:
@@ -545,13 +533,7 @@ Return a JSON object mapping tool name to new description. Only include tools wh
 Example: {{"tool_name": "Better description here"}}"""
 
     try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text
+        text = complete(prompt, max_tokens=1024)
         if "```" in text:
             text = text.split("```")[1]
             if text.startswith("json"):
