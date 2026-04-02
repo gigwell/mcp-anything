@@ -51,6 +51,7 @@ class SpringEndpoint:
     source_file: str
     controller_class: str
     controller_path: str  # base path from class-level annotation
+    annotations: list[str] = field(default_factory=list)  # e.g. ["@MCPAccess", "@GET"]
 
 
 @dataclass
@@ -694,6 +695,7 @@ def _ast_caps_to_result(
             source_file=file_info.path,
             controller_class=class_name,
             controller_path="",
+            annotations=cap.get("annotations", []),
         ))
 
 
@@ -768,6 +770,15 @@ def _analyze_jaxrs(source: str, file_info: FileInfo, result: JavaAnalysisResult)
         return_type = match.group(3)
         method_name = match.group(4)
 
+        # Collect all annotations from the matched text
+        matched_text = match.group(0)
+        annotations = [f"@{http_method}"]
+        # Find all @AnnotationName patterns (may have parameters)
+        for ann_match in re.finditer(r'@(\w+)(?:\s*\([^)]*\))?', matched_text):
+            ann_name = ann_match.group(1)
+            if ann_name not in (http_method, "Path"):  # HTTP method and Path are handled separately
+                annotations.append(f"@{ann_name}")
+
         paren_start = match.end() - 1
         param_string = _extract_balanced_parens(source, paren_start)
 
@@ -793,6 +804,7 @@ def _analyze_jaxrs(source: str, file_info: FileInfo, result: JavaAnalysisResult)
             source_file=file_info.path,
             controller_class=controller_name,
             controller_path=class_path,
+            annotations=annotations,
         ))
 
 
@@ -814,6 +826,13 @@ def _analyze_kotlin_jaxrs(source: str, file_info: FileInfo, result: JavaAnalysis
         # Extract @Path from the between_text (may be on same line or separate line)
         path_match = _KOTLIN_PATH_RE.search(between_text)
         method_path = path_match.group(1) if path_match else ""
+
+        # Extract all annotations from between_text
+        annotations = [f"@{http_method}"]
+        for ann_match in re.finditer(r'@(\w+)', between_text):
+            ann_name = ann_match.group(1)
+            if ann_name not in ("Path",):  # Path is handled separately
+                annotations.append(f"@{ann_name}")
 
         paren_start = match.end() - 1
         param_string = _extract_balanced_parens(source, paren_start)
@@ -837,6 +856,7 @@ def _analyze_kotlin_jaxrs(source: str, file_info: FileInfo, result: JavaAnalysis
             source_file=file_info.path,
             controller_class=controller_name,
             controller_path=class_path,
+            annotations=annotations,
         ))
 
 
@@ -1021,6 +1041,7 @@ def java_results_to_capabilities(
                 ipc_type=IPCType.PROTOCOL,
                 http_method=ep.http_method,
                 http_path=ep.path,
+                annotations=ep.annotations,
             ))
 
     return capabilities

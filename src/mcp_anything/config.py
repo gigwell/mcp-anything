@@ -24,6 +24,8 @@ class CLIOptions(BaseModel):
     source_url: Optional[str] = None  # URL if fetched from remote
     include: Optional[list[str]] = None  # glob patterns to include capabilities
     exclude: Optional[list[str]] = None  # glob patterns to exclude capabilities
+    include_annotation: Optional[list[str]] = None  # annotations that must be present
+    exclude_annotation: Optional[list[str]] = None  # annotations that must not be present
     scope_file: Optional[Path] = None  # path to scope.yaml for capability curation
     review: bool = False  # pause after ANALYZE to write scope.yaml for editing
     proxy_auth_headers: Optional[list[str]] = None  # HTTP headers to proxy from MCP client to upstream API

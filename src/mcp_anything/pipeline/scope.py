@@ -75,17 +75,33 @@ def apply_scope(
     *,
     include_patterns: Optional[list[str]] = None,
     exclude_patterns: Optional[list[str]] = None,
+    include_annotation: Optional[list[str]] = None,
+    exclude_annotation: Optional[list[str]] = None,
     scope_file: Optional[Path] = None,
 ) -> AnalysisResult:
     """Filter analysis capabilities based on scope rules.
 
     Priority order:
-    1. scope_file per-capability enabled/disabled flags (most specific)
-    2. scope_file include/exclude patterns
-    3. CLI --include/--exclude patterns (additive with scope_file patterns)
+    1. Annotation filters (include_annotation / exclude_annotation)
+    2. scope_file per-capability enabled/disabled flags (most specific)
+    3. scope_file include/exclude patterns
+    4. CLI --include/--exclude patterns (additive with scope_file patterns)
 
     Returns a new AnalysisResult with filtered capabilities.
     """
+    # 1. Apply annotation filters first
+    filtered: list[Capability] = list(analysis.capabilities)
+    
+    if include_annotation:
+        # All specified annotations must be present
+        for ann in include_annotation:
+            filtered = [c for c in filtered if ann in c.annotations]
+    
+    if exclude_annotation:
+        # None of the excluded annotations should be present
+        for ann in exclude_annotation:
+            filtered = [c for c in filtered if ann not in c.annotations]
+
     # Merge patterns from scope file and CLI
     all_include: list[str] = list(include_patterns or [])
     all_exclude: list[str] = list(exclude_patterns or [])
@@ -106,14 +122,14 @@ def apply_scope(
                 else:
                     cap_override[entry["name"]] = None
 
-    filtered: list[Capability] = []
-    for cap in analysis.capabilities:
+    result: list[Capability] = []
+    for cap in filtered:
         # Check per-capability override first (most specific)
         if cap.name in cap_override and cap_override[cap.name] is not None:
             if not cap_override[cap.name]:
                 continue
             # Explicitly enabled — skip pattern checks
-            filtered.append(cap)
+            result.append(cap)
             continue
 
         # Build match targets: capability name, source file, description, HTTP path
@@ -145,7 +161,7 @@ def apply_scope(
             if excluded:
                 continue
 
-        filtered.append(cap)
+        result.append(cap)
 
     # Return a copy with filtered capabilities
-    return analysis.model_copy(update={"capabilities": filtered})
+    return analysis.model_copy(update={"capabilities": result})

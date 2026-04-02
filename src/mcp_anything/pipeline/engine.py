@@ -81,6 +81,8 @@ class PipelineEngine:
         has_scope = (
             self.options.include
             or self.options.exclude
+            or self.options.include_annotation
+            or self.options.exclude_annotation
             or self.options.scope_file
             or scope_path.exists()
         )
@@ -96,6 +98,8 @@ class PipelineEngine:
             manifest.analysis,
             include_patterns=self.options.include,
             exclude_patterns=self.options.exclude,
+            include_annotation=self.options.include_annotation,
+            exclude_annotation=self.options.exclude_annotation,
             scope_file=effective_scope_file,
         )
         after = len(manifest.analysis.capabilities)

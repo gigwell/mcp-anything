@@ -68,6 +68,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Glob pattern to exclude capabilities (repeatable, e.g. --exclude '/internal/*')",
     )
     gen.add_argument(
+        "--include-annotation",
+        action="append",
+        default=None,
+        help="Only include methods with this annotation (repeatable, e.g. --include-annotation '@MCPAccess')",
+    )
+    gen.add_argument(
+        "--exclude-annotation",
+        action="append",
+        default=None,
+        help="Exclude methods with this annotation (repeatable, e.g. --exclude-annotation '@InternalApi')",
+    )
+    gen.add_argument(
         "--scope-file",
         type=Path,
         default=None,
@@ -133,6 +145,8 @@ def parse_options(args: argparse.Namespace) -> CLIOptions:
         target=getattr(args, "target", "fastmcp"),
         include=getattr(args, "include", None),
         exclude=getattr(args, "exclude", None),
+        include_annotation=getattr(args, "include_annotation", None),
+        exclude_annotation=getattr(args, "exclude_annotation", None),
         scope_file=getattr(args, "scope_file", None),
         review=getattr(args, "review", False),
         proxy_auth_headers=getattr(args, "proxy_auth_headers", None),

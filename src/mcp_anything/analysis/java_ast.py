@@ -249,6 +249,9 @@ def _extract_method_cap(
     return_type = _map_return_type(method.return_type)
     name = _build_tool_name(http_method, full_path, method.name)
 
+    # Collect all annotations on this method
+    annotations = [f"@{ann.name}" for ann in method.annotations]
+
     return {
         "name": name,
         "http_method": http_method,
@@ -259,6 +262,7 @@ def _extract_method_cap(
         "produces": method_produces,
         "consumes": method_consumes,
         "backend_type": "http",
+        "annotations": annotations,
         # Private fields used by java_analyzer integration only
         "_java_method_name": method.name,
         "_controller_class": class_name,

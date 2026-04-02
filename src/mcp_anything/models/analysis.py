@@ -81,6 +81,7 @@ class Capability(BaseModel):
     ipc_type: Optional[IPCType] = None
     http_method: Optional[str] = None  # e.g. "GET", "POST"
     http_path: Optional[str] = None  # e.g. "/api/users/{id}"
+    annotations: list[str] = Field(default_factory=list)  # e.g. ["@MCPAccess", "@GET"]
 
 
 class AnalysisResult(BaseModel):
