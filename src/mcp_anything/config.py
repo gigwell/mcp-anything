@@ -25,6 +25,7 @@ class CLIOptions(BaseModel):
     exclude: Optional[list[str]] = None  # glob patterns to exclude capabilities
     scope_file: Optional[Path] = None  # path to scope.yaml for capability curation
     review: bool = False  # pause after ANALYZE to write scope.yaml for editing
+    proxy_auth_headers: Optional[list[str]] = None  # HTTP headers to proxy from MCP client to upstream API
 
     def resolved_name(self) -> str:
         """Server name derived from codebase directory or override."""

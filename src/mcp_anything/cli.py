@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Pause after analysis to write scope.yaml for manual editing, then --resume to continue",
     )
+    gen.add_argument(
+        "--proxy-auth-headers",
+        nargs="*",
+        default=None,
+        help="HTTP headers to proxy from MCP client to upstream API (default: Authorization)",
+    )
     gen.add_argument("-v", "--verbose", action="store_true")
 
     # analyze
@@ -122,6 +128,7 @@ def parse_options(args: argparse.Namespace) -> CLIOptions:
         exclude=getattr(args, "exclude", None),
         scope_file=getattr(args, "scope_file", None),
         review=getattr(args, "review", False),
+        proxy_auth_headers=getattr(args, "proxy_auth_headers", None),
     )
 
 

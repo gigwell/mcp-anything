@@ -96,6 +96,7 @@ class BackendConfig(BaseModel):
     env_vars: dict[str, str] = Field(default_factory=dict)
     codebase_path: str = ""  # absolute path to the target app
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    proxy_auth_headers: list[str] = Field(default_factory=list)  # HTTP headers to proxy from MCP client to upstream
 
 
 class ServerDesign(BaseModel):

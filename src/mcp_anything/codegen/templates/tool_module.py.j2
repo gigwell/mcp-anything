@@ -14,6 +14,9 @@ from mcp.server.fastmcp import FastMCP
 
 from {{ package_name }}.backend import BackendError
 {% endif %}
+{% if design.backend and design.backend.proxy_auth_headers %}
+from mcp.server.fastmcp import Context
+{% endif %}
 {% set ns = namespace(has_models=false) %}
 {% for tool in tools %}
 {% for param in tool.parameters %}
@@ -190,6 +193,9 @@ def register_tools(server: FastMCP{% if design.backend %}, _get_backend{% endif 
     {% endfor %}
     {% endif %}
     {% endif %}
+    {% if tool.impl.strategy == "http_call" and design.backend and design.backend.proxy_auth_headers %}
+        ctx: Context | None = None,
+    {% endif %}
     ) -> str:
         """{{ tool.description | safe_docstring }}"""
     {% if tool.impl.strategy == "http_call" %}
@@ -211,6 +217,20 @@ def register_tools(server: FastMCP{% if design.backend %}, _get_backend{% endif 
             query_params["{{ param.name }}"] = str({{ param.name | safe_identifier }})
         {% endif %}
         {% endfor %}
+        {% if design.backend and design.backend.proxy_auth_headers %}
+        # Proxy auth headers from MCP client (HTTP transport only)
+        proxy_headers: dict[str, str] = {}
+        if ctx is not None:
+            try:
+                request = ctx.request_context.request
+                if request is not None:
+                    for hdr in {{ design.backend.proxy_auth_headers | tojson }}:
+                        value = request.headers.get(hdr)
+                        if value is not None:
+                            proxy_headers[hdr] = value
+            except Exception:
+                pass  # Context unavailable or request not present (stdio mode)
+        {% endif %}
         try:
             return await _get_backend().request(
                 "{{ tool.impl.http_method }}",
@@ -218,6 +238,11 @@ def register_tools(server: FastMCP{% if design.backend %}, _get_backend{% endif 
                 params=query_params or None,
                 body=request_body,
                 path_params=path_params or None,
+                {% if design.backend and design.backend.proxy_auth_headers %}
+                headers=proxy_headers or None,
+                {% else %}
+                headers=None,
+                {% endif %}
             )
         except BackendError as exc:
             return json.dumps(exc.to_dict(), indent=2)

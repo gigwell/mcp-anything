@@ -322,7 +322,7 @@ def _build_auth_config(analysis: AnalysisResult, codebase_path: str = "") -> Aut
     return AuthConfig()
 
 
-def _build_backend_config(analysis: AnalysisResult, codebase_path: str = "") -> Optional[BackendConfig]:
+def _build_backend_config(analysis: AnalysisResult, codebase_path: str = "", proxy_auth_headers: Optional[list[str]] = None) -> Optional[BackendConfig]:
     """Create backend configuration from analysis results."""
     ipc_type = analysis.primary_ipc
     if not ipc_type:
@@ -375,6 +375,13 @@ def _build_backend_config(analysis: AnalysisResult, codebase_path: str = "") -> 
     auth = _build_auth_config(analysis, codebase_path)
     if auth.auth_type:
         config.auth = auth
+
+    # Set proxy auth headers for HTTP backends
+    if proxy_auth_headers:
+        config.proxy_auth_headers = proxy_auth_headers
+    elif config.backend_type in (IPCType.HTTP, IPCType.PROTOCOL):
+        # Default to Authorization header for HTTP backends
+        config.proxy_auth_headers = ["Authorization"]
 
     return config
 
@@ -668,7 +675,8 @@ class DesignPhase(Phase):
                     ]
 
         # Build backend config
-        backend = _build_backend_config(analysis, ctx.manifest.codebase_path)
+        proxy_headers = ctx.options.proxy_auth_headers
+        backend = _build_backend_config(analysis, ctx.manifest.codebase_path, proxy_headers)
 
         # For Zustand apps: forward store import metadata into backend env_vars so
         # the emitter can generate a fully working bridge component.
