@@ -15,3 +15,7 @@ venv/
 .DS_Store
 mcp-anything-manifest.json
 .factory
+node_modules/
+package-lock.json
+.mcp.json
+http-mcp-server/

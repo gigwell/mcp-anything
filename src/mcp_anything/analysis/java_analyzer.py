@@ -1,7 +1,8 @@
-"""Regex-based Java source analyzer for Spring, JAX-RS, and Micronaut endpoints.
+"""Java/Kotlin source analyzer for Spring, JAX-RS, and Micronaut endpoints.
 
-Extracts REST controller methods, path mappings, request parameters,
-path variables, and request bodies from Java source files.
+Uses javalang AST parsing for Java files when available (accurate, handles any
+annotation ordering or formatting).  Falls back to regex for Kotlin files and
+when javalang is not installed.
 """
 
 import re
@@ -10,6 +11,17 @@ from pathlib import Path
 from typing import Optional
 
 from mcp_anything.models.analysis import Capability, FileInfo, IPCType, Language, ParameterSpec
+
+# ---------------------------------------------------------------------------
+# Optional AST-based analyzer (javalang)
+# ---------------------------------------------------------------------------
+
+try:
+    from mcp_anything.analysis.java_ast import analyze_java_string as _ast_analyze_string
+    _HAS_JAVALANG = True
+except ImportError:  # pragma: no cover
+    _HAS_JAVALANG = False
+    _ast_analyze_string = None  # type: ignore
 
 # Kotlin type → MCP parameter type additions
 _KOTLIN_TYPE_MAP = {
@@ -212,20 +224,21 @@ _KOTLIN_SPRING_PARAM_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 # Class-level @Path for Kotlin: annotation + 'class ClassName'
-# Note: Annotations may have trailing comments like @Timeout(1000) // comment with )
-# so we match entire lines until newline
+# Use [^\n]*\n to skip whole annotation lines so trailing comments like
+# // note (with parens) don't terminate the match prematurely.
 _KOTLIN_JAXRS_CLASS_PATH_RE = re.compile(
-    r'@Path\s*\(\s*["\']([^"\']*)["\']\s*\)\s*\n'
-    r'(?:@\w+[^\n]*\n)*'  # Skip entire annotation lines (comments may contain ')')
+    r'@Path\s*\(\s*["\']([^"\']*)["\'].*?\)\s*\n'
+    r'(?:@\w+[^\n]*\n)*'   # skip entire annotation lines
     r'(?:open\s+)?class\s+(\w+)',
-    re.DOTALL,
 )
 
 # Kotlin method: @GET/@POST/... + optional @Path + 'fun methodName('
+# Broadened to skip ANY intervening annotations (not just @Consumes/@Produces)
+# so patterns like @Timeout(1000) // note (with parens) don't break the match.
 _KOTLIN_JAXRS_METHOD_RE = re.compile(
     r'@(GET|POST|PUT|DELETE|PATCH)\b'
     r'(?:\s+@Path\s*\(\s*["\']([^"\']*)["\'].*?\))?'
-    r'(?:\s+@\w+(?:\s*\([^)]*\))?\s+)*'  # skip any intervening annotations
+    r'(?:\s+@\w+(?:\s*\([^)]*\))?)*'   # skip any number of other annotations
     r'\s+'
     r'(?:override\s+)?fun\s+'
     r'(\w+)'  # method name
@@ -586,7 +599,11 @@ def _detect_framework(source: str) -> str:
 # ---------------------------------------------------------------------------
 
 def analyze_java_file(root: Path, file_info: FileInfo) -> Optional[JavaAnalysisResult]:
-    """Analyze a single Java or Kotlin file for REST endpoints."""
+    """Analyze a single Java or Kotlin file for REST endpoints.
+
+    For Java files, uses the javalang AST parser when available and falls back
+    to regex.  Kotlin files always use the regex path (javalang is Java-only).
+    """
     if file_info.language not in (Language.JAVA, Language.KOTLIN):
         return None
 
@@ -601,6 +618,24 @@ def analyze_java_file(root: Path, file_info: FileInfo) -> Optional[JavaAnalysisR
         result.has_spring_boot = True
 
     is_kotlin = file_info.language == Language.KOTLIN
+
+    # -----------------------------------------------------------------------
+    # AST path: javalang for Java files
+    # -----------------------------------------------------------------------
+    if _HAS_JAVALANG and not is_kotlin:
+        ast_caps = _ast_analyze_string(source)
+        if ast_caps:
+            _ast_caps_to_result(ast_caps, file_info, result)
+            if result.endpoints and not result.has_spring_boot:
+                return result
+            # If AST produced endpoints, trust them; keep has_spring_boot from above
+            if result.endpoints:
+                return result
+        # Fall through to regex if AST found nothing
+
+    # -----------------------------------------------------------------------
+    # Regex fallback
+    # -----------------------------------------------------------------------
     framework = _detect_framework(source)
 
     if framework == "jaxrs":
@@ -619,6 +654,46 @@ def analyze_java_file(root: Path, file_info: FileInfo) -> Optional[JavaAnalysisR
         return None
 
     return result
+
+
+def _ast_caps_to_result(
+    caps: list,
+    file_info: FileInfo,
+    result: JavaAnalysisResult,
+) -> None:
+    """Convert java_ast capability dicts into SpringEndpoint objects in *result*."""
+    seen_classes: set[str] = set()
+
+    for cap in caps:
+        class_name = cap.get("_controller_class", "")
+        if class_name and class_name not in seen_classes:
+            seen_classes.add(class_name)
+            result.controllers.append(class_name)
+
+        params: list[ParameterSpec] = []
+        for p in cap.get("parameters", []):
+            params.append(ParameterSpec(
+                name=p["name"],
+                type=p["type"],
+                description=p.get("description", ""),
+                required=p.get("required", True),
+                default=p.get("default"),
+                location=p.get("source", ""),
+                original_type=p.get("_original_java_type"),
+            ))
+
+        result.endpoints.append(SpringEndpoint(
+            http_method=cap["http_method"],
+            path=cap["path"],
+            # Preserve original Java method name so existing tests can look it up
+            method_name=cap.get("_java_method_name", cap.get("name", "")),
+            description=cap.get("description", ""),
+            parameters=params,
+            return_type=cap.get("return_type", "object"),
+            source_file=file_info.path,
+            controller_class=class_name,
+            controller_path="",
+        ))
 
 
 def _analyze_spring(source: str, file_info: FileInfo, result: JavaAnalysisResult) -> None:
