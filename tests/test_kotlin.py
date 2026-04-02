@@ -195,3 +195,51 @@ class TestKotlinCapabilities:
         for cap in caps:
             assert cap.ipc_type == IPCType.PROTOCOL
             assert cap.category == "api"
+
+
+class TestKotlinJaxRSEdgeCases:
+    """Test edge cases in Kotlin JAX-RS parsing: trailing comments, single-line annotations."""
+
+    def _get_fi(self) -> FileInfo:
+        return FileInfo(
+            path="src/main/kotlin/com/example/api/ItemResource.kt",
+            language=Language.KOTLIN,
+            size_bytes=800,
+            line_count=60,
+        )
+
+    def test_trailing_comment_on_annotation(self, fake_kotlin_jaxrs_app):
+        """@GET with trailing comment on annotation line should still be detected."""
+        result = analyze_java_file(fake_kotlin_jaxrs_app, self._get_fi())
+        # Should find method 'getStatus' even with // comment
+        method_names = {ep.method_name for ep in result.endpoints}
+        assert "getStatus" in method_names, f"getStatus not found in {method_names}"
+
+    def test_naked_get_uses_class_path(self, fake_kotlin_jaxrs_app):
+        """Method without @Path should use class-level @Path."""
+        result = analyze_java_file(fake_kotlin_jaxrs_app, self._get_fi())
+        # getStatus has no @Path, should use class path /api/items
+        status_ep = next((ep for ep in result.endpoints if ep.method_name == "getStatus"), None)
+        assert status_ep is not None, "getStatus endpoint not found"
+        assert status_ep.path == "/api/items", f"Expected /api/items, got {status_ep.path}"
+
+    def test_multiple_annotations_on_one_line(self, fake_kotlin_jaxrs_app):
+        """Single-line annotation pattern should parse correctly."""
+        result = analyze_java_file(fake_kotlin_jaxrs_app, self._get_fi())
+        health_ep = next((ep for ep in result.endpoints if ep.method_name == "getHealth"), None)
+        assert health_ep is not None, "getHealth endpoint not found"
+        assert "/health" in health_ep.path, f"Expected /health in path, got {health_ep.path}"
+
+    def test_list_items_uses_class_path(self, fake_kotlin_jaxrs_app):
+        """Existing test: listItems has no @Path, uses class path."""
+        result = analyze_java_file(fake_kotlin_jaxrs_app, self._get_fi())
+        list_ep = next((ep for ep in result.endpoints if ep.method_name == "listItems"), None)
+        assert list_ep is not None
+        assert list_ep.path == "/api/items"
+
+    def test_all_endpoints_found(self, fake_kotlin_jaxrs_app):
+        """All 7 endpoints should be detected."""
+        result = analyze_java_file(fake_kotlin_jaxrs_app, self._get_fi())
+        expected = {"listItems", "getItem", "createItem", "updateItem", "deleteItem", "getStatus", "getHealth"}
+        found = {ep.method_name for ep in result.endpoints}
+        assert found == expected, f"Expected {expected}, got {found}"

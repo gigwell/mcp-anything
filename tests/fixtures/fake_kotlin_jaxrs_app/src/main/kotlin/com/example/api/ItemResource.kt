@@ -34,4 +34,16 @@ class ItemResource {
     @Path("/{id}")
     fun deleteItem(@PathParam("id") id: Long) {
     }
+
+    // Edge case: Naked @GET with trailing comment on annotation
+    @GET
+    @RequestTimeout(1000) // load balancer health check
+    fun getStatus(): Status {
+        return Status()
+    }
+
+    // Edge case: Multiple annotations on single line
+    @GET @Path("/health") @Timeout(5000) fun getHealth(): Health {
+        return Health()
+    }
 }

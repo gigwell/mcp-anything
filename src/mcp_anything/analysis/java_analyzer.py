@@ -233,18 +233,19 @@ _KOTLIN_JAXRS_CLASS_PATH_RE = re.compile(
 )
 
 # Kotlin method: @GET/@POST/... + optional @Path + 'fun methodName('
-# Broadened to skip ANY intervening annotations (not just @Consumes/@Produces)
-# so patterns like @Timeout(1000) // note (with parens) don't break the match.
+# Uses two-step approach: capture everything between HTTP method and 'fun',
+# then extract @Path separately to handle trailing comments on annotation lines.
 _KOTLIN_JAXRS_METHOD_RE = re.compile(
     r'@(GET|POST|PUT|DELETE|PATCH)\b'
-    r'(?:\s+@Path\s*\(\s*["\']([^"\']*)["\'].*?\))?'
-    r'(?:\s+@\w+(?:\s*\([^)]*\))?)*'   # skip any number of other annotations
-    r'\s+'
+    r'(.*?)'  # capture everything between @GET and 'fun'
     r'(?:override\s+)?fun\s+'
     r'(\w+)'  # method name
     r'\s*\(',
     re.DOTALL,
 )
+
+# Separate regex to extract @Path from the captured text
+_KOTLIN_PATH_RE = re.compile(r'@Path\s*\(\s*["\']([^"\']*)["\']')
 
 # Kotlin JAX-RS params: @QueryParam/@PathParam/@FormParam annotation + 'name: Type'
 _KOTLIN_JAXRS_PARAM_RE = re.compile(
@@ -807,8 +808,12 @@ def _analyze_kotlin_jaxrs(source: str, file_info: FileInfo, result: JavaAnalysis
 
     for match in _KOTLIN_JAXRS_METHOD_RE.finditer(source):
         http_method = match.group(1)
-        method_path = match.group(2) or ""
+        between_text = match.group(2)  # text between @GET and 'fun'
         method_name = match.group(3)
+
+        # Extract @Path from the between_text (may be on same line or separate line)
+        path_match = _KOTLIN_PATH_RE.search(between_text)
+        method_path = path_match.group(1) if path_match else ""
 
         paren_start = match.end() - 1
         param_string = _extract_balanced_parens(source, paren_start)
