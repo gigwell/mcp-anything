@@ -81,11 +81,26 @@ def _python_type(type_str: str) -> str:
 def _default_value(param) -> str:
     """Generate a Python default value expression.
 
-    Always returns None for optional parameters so that only explicitly
-    provided values are sent to the backend.  This avoids conflicts where
-    an API rejects mutually-exclusive query params that both carry their
-    OpenAPI-spec defaults (e.g. GitHub's type + affiliation).
+    For Java-extracted schemas, uses the actual default value from the source code.
+    For OpenAPI/other sources, returns None for optional parameters to avoid
+    conflicts where an API rejects mutually-exclusive query params that both
+    carry their OpenAPI-spec defaults (e.g. GitHub's type + affiliation).
+
+    Args:
+        param: ParameterSpec or SchemaField with 'required' and optional 'default' fields
     """
+    # If param has an explicit default from source code extraction, use it
+    explicit_default = getattr(param, "default", None)
+    if explicit_default is not None:
+        # If it's a string, quote it as a Python string literal
+        if isinstance(explicit_default, str):
+            # Escape backslashes and double quotes
+            escaped = explicit_default.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+        # For other types (int, bool, etc.), return as-is
+        return str(explicit_default)
+
+    # Otherwise, optional params default to None
     if not param.required:
         return "None"
     return ""
@@ -105,6 +120,17 @@ def _safe_docstring(value: str) -> str:
     # can break generated template formatting
     first_line = value.split("\n")[0].strip()
     return first_line
+
+
+def _quote_string(value: str) -> str:
+    """Quote a string for use in Python code.
+
+    Escapes quotes and backslashes to produce valid string literals.
+    """
+    if not value:
+        return '""'
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _param_model_name(param) -> str:
@@ -234,6 +260,7 @@ def create_jinja_env() -> Environment:
         keep_trailing_newline=True,
         trim_blocks=True,
         lstrip_blocks=True,
+        extensions=["jinja2.ext.do"],  # Enable 'do' extension for mutation operations
     )
 
     env.filters["safe_identifier"] = _safe_identifier
@@ -244,6 +271,7 @@ def create_jinja_env() -> Environment:
     env.filters["default_value"] = _default_value
     env.filters["safe_docstring"] = _safe_docstring
     env.filters["param_model_name"] = _param_model_name
+    env.filters["quote"] = _quote_string
     env.tests["has_properties"] = _has_properties
 
     return env

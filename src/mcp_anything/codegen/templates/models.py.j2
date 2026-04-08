@@ -1,18 +1,71 @@
 """Data models for {{ design.server_name }} MCP server."""
 
-from dataclasses import dataclass
-from typing import Any
+from typing import Optional, List, Literal, Any
+from pydantic import BaseModel
 
+{% set generated_types = [] %}
 
+{# Macro to render a single model's fields #}
+{% macro render_model_fields(param) %}
+{% for prop in param.properties %}
+{% if prop.enum_values %}
+    {{ prop.name }}: Literal[{{ prop.enum_values | map("quote") | join(", ") }}]{{ ' = ' ~ prop.default if prop.default else (' | None = None' if not prop.required else '') }}
+{% elif prop.properties %}
+    {{ prop.name }}: {{ prop.original_type | pascal_case }}{{ ' = ' ~ prop.default if prop.default else (' | None = None' if not prop.required else '') }}
+{% elif prop.type == "array" %}
+    {{ prop.name }}: List[Any]{{ ' = ' ~ prop.default if prop.default else (' | None = None' if not prop.required else '') }}
+{% else %}
+    {{ prop.name }}: {{ prop.type | python_type }}{{ ' = ' ~ prop.default if prop.default else (' | None = None' if not prop.required else '') }}
+{% endif %}
+{% endfor %}
+{% endmacro %}
+
+{# Macro to render models depth-first (nested types rendered before parent) #}
+{% macro render_model(param) %}
+{% if param.original_type and param.original_type not in generated_types and param.properties %}
+{# First render all nested models #}
+{% for prop in param.properties %}
+{% if prop.properties and prop.original_type %}
+{{ render_model(prop) }}
+{% endif %}
+{% endfor %}
+{# Then render this model #}
+class {{ param.original_type | pascal_case }}(BaseModel):
+    """{{ param.description or param.original_type }}."""
+{{ render_model_fields(param) }}
+
+{% do generated_types.append(param.original_type) %}
+{% endif %}
+{% endmacro %}
+
+{# Generate all nested models #}
 {% for tool in design.tools %}
 {% if tool.parameters %}
-@dataclass
-class {{ tool.name | pascal_case }}Params:
-    """Parameters for {{ tool.name }}."""
-    {% for param in tool.parameters %}
-    {{ param.name | safe_identifier }}: {{ param.type | python_type }}{% if not param.required %} | None = None{% endif %}
+{% for param in tool.parameters %}
+{% if param.properties %}
+{{ render_model(param) }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
 
-    {% endfor %}
+{# Generate tool parameter classes #}
+{% for tool in design.tools %}
+{% if tool.parameters %}
+
+class {{ tool.name | pascal_case }}Params(BaseModel):
+    """Parameters for {{ tool.name }}."""
+{% for param in tool.parameters %}
+{% if param.enum_values %}
+    {{ param.name | safe_identifier }}: Literal[{{ param.enum_values | map("quote") | join(", ") }}]{{ ' = ' ~ param.default if param.default else (' | None = None' if not param.required else '') }}
+{% elif param.properties %}
+    {{ param.name | safe_identifier }}: {{ param.original_type | pascal_case }}{{ ' = ' ~ param.default if param.default else (' | None = None' if not param.required else '') }}
+{% elif param.type == "array" %}
+    {{ param.name | safe_identifier }}: List[Any]{{ ' = ' ~ param.default if param.default else (' | None = None' if not param.required else '') }}
+{% else %}
+    {{ param.name | safe_identifier }}: {{ param.type | python_type }}{{ ' = ' ~ param.default if param.default else (' | None = None' if not param.required else '') }}
+{% endif %}
+{% endfor %}
 
 {% endif %}
 {% endfor %}

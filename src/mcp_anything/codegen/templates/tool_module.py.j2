@@ -28,23 +28,63 @@ from mcp.server.fastmcp import Context
 {% if ns.has_models %}
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional{% if tools | selectattr('parameters') | list | length > 0 %}, Literal{% endif %}
+
+{# Macro to get the Python type for a property #}
+{% macro get_prop_type(prop) %}{% if prop.enum_values %}Literal[{{ prop.enum_values | map("quote") | join(", ") }}]{% elif prop is has_properties and prop.original_type %}{{ prop.original_type }}{% elif prop.type == "array" %}list{% elif prop.type == "object" %}dict{% else %}{{ prop.type | python_type }}{% endif %}{% endmacro %}
+
 {% set emitted_models = namespace(names=[]) %}
+
+{# Macro to generate nested model classes depth-first #}
+{% macro generate_nested_model(prop, depth=0) %}
+{% if prop is has_properties and prop.original_type and prop.original_type not in emitted_models.names %}
+{# First generate any nested models this property needs #}
+{% for nested_prop in prop.properties %}
+{% if nested_prop is has_properties and nested_prop.original_type %}
+{{ generate_nested_model(nested_prop, depth + 1) }}
+{% endif %}
+{% endfor %}
+{# Then generate this model #}
+{% set _ = emitted_models.names.append(prop.original_type) %}
+
+class {{ prop.original_type }}(BaseModel):
+    """{{ prop.original_type }} schema."""
+{% for p in prop.properties %}
+{% if p.required %}
+    {{ p.name | safe_identifier }}: {{ get_prop_type(p) }}
+{% elif p.default %}
+    {{ p.name | safe_identifier }}: {{ get_prop_type(p) }} = {{ p | default_value }}
+{% else %}
+    {{ p.name | safe_identifier }}: Optional[{{ get_prop_type(p) }}] = None
+{% endif %}
+{% endfor %}
+
+{% endif %}
+{% endmacro %}
+
 {% for tool in tools %}
 {% for param in tool.parameters %}
 {% if param is has_properties and (param | param_model_name) not in emitted_models.names %}
+{# Generate nested models first #}
+{% for prop in param.properties %}
+{% if prop is has_properties and prop.original_type %}
+{{ generate_nested_model(prop) }}
+{% endif %}
+{% endfor %}
 {% set _ = emitted_models.names.append(param | param_model_name) %}
-
 
 class {{ param | param_model_name }}(BaseModel):
     """Schema for {{ param.name }} parameter."""
 {% for prop in param.properties %}
 {% if prop.required %}
-    {{ prop.name | safe_identifier }}: {{ prop.type | python_type }}
+    {{ prop.name | safe_identifier }}: {{ get_prop_type(prop) }}
+{% elif prop.default %}
+    {{ prop.name | safe_identifier }}: {{ get_prop_type(prop) }} = {{ prop | default_value }}
 {% else %}
-    {{ prop.name | safe_identifier }}: Optional[{{ prop.type | python_type }}] = None
+    {{ prop.name | safe_identifier }}: Optional[{{ get_prop_type(prop) }}] = None
 {% endif %}
 {% endfor %}
+
 {% endif %}
 {% endfor %}
 {% endfor %}
@@ -174,13 +214,17 @@ def register_tools(server: FastMCP{% if design.backend %}, _get_backend{% endif 
     {% if param is has_properties %}
     {% if param.required %}
         {{ param.name | safe_identifier }}: {{ param | param_model_name }},
+    {% elif param.default %}
+        {{ param.name | safe_identifier }}: {{ param | param_model_name }} = {{ param | default_value }},
     {% else %}
-        {{ param.name | safe_identifier }}: {{ param | param_model_name }} | None = {{ param | default_value }},
+        {{ param.name | safe_identifier }}: {{ param | param_model_name }} | None = None,
     {% endif %}
     {% elif param.required %}
         {{ param.name | safe_identifier }}: {{ param.type | python_type }},
+    {% elif param.default %}
+        {{ param.name | safe_identifier }}: {{ param.type | python_type }} = {{ param | default_value }},
     {% else %}
-        {{ param.name | safe_identifier }}: {{ param.type | python_type }} | None = {{ param | default_value }},
+        {{ param.name | safe_identifier }}: {{ param.type | python_type }} | None = None,
     {% endif %}
     {% endfor %}
     {% if tool.impl.strategy == "python_call" and tool.impl.python_class %}
@@ -208,8 +252,11 @@ def register_tools(server: FastMCP{% if design.backend %}, _get_backend{% endif 
         path_params["{{ param.name }}"] = str({{ param.name | safe_identifier }})
         {% elif tool.impl.arg_mapping.get(param.name, {}).get("style") == "body" %}
         if {{ param.name | safe_identifier }} is not None:
-            {% if param is has_properties %}
-            _body_fields["{{ param.name }}"] = {{ param.name | safe_identifier }}.model_dump() if hasattr({{ param.name | safe_identifier }}, "model_dump") else {{ param.name | safe_identifier }}
+            {# Detect if this is the sole body parameter with nested properties - it represents the entire request body #}
+            {% set body_params = tool.parameters | selectattr('name', 'in', (tool.impl.arg_mapping.items() | selectattr('1.style', 'equalto', 'body') | map(attribute='0') | list)) | list %}
+            {% set is_whole_body = (body_params | length == 1 and param is has_properties) %}
+            {% if is_whole_body %}
+            _body_fields.update({{ param.name | safe_identifier }}.model_dump() if hasattr({{ param.name | safe_identifier }}, "model_dump") else {{ param.name | safe_identifier }})
             {% else %}
             _body_fields["{{ param.name }}"] = {{ param.name | safe_identifier }}
             {% endif %}
