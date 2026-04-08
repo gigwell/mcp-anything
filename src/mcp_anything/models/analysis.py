@@ -41,6 +41,7 @@ class IPCType(str, Enum):
     PYTHON_API = "python-api"
     PROTOCOL = "protocol"
     FILE = "file"
+    HTTP = "http"
 
 
 class IPCMechanism(BaseModel):

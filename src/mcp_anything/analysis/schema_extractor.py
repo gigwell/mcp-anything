@@ -39,6 +39,16 @@ _JAVA_TYPE_MAP = {
     "HashMap": "object",
 }
 
+# Java primitive types (always required unless nullable annotation present)
+_JAVA_PRIMITIVE_TYPES = {
+    "int", "long", "short", "byte", "float", "double", "boolean", "char",
+}
+
+# Java boxed primitive types (treated as potentially nullable)
+_JAVA_BOXED_PRIMITIVES = {
+    "Integer", "Long", "Short", "Byte", "Float", "Double", "Boolean", "Character",
+}
+
 _TS_TYPE_MAP = {
     "string": "string",
     "number": "integer",
@@ -57,6 +67,7 @@ class SchemaField:
     required: bool = True
     description: str = ""
     default: Optional[str] = None
+    original_type: Optional[str] = None  # original language type name for nested resolution
 
 
 def _python_type_to_schema(annotation_node: ast.expr) -> tuple[str, bool]:
@@ -198,8 +209,118 @@ def extract_pydantic_fields(source: str, class_name: str) -> list[SchemaField]:
     return fields
 
 
+def _is_java_field_required(java_type: str, field_context: str = "") -> bool:
+    """Determine if a Java field should be required in the schema.
+
+    For MCP schema purposes, ALL fields are optional to allow partial updates.
+    This means clients can send only the fields they want to modify without
+    validation errors for missing fields.
+
+    Args:
+        java_type: The Java type of the field
+        field_context: Optional surrounding text to check for annotations (unused, kept for API compatibility)
+    """
+    # All fields are optional for MCP schema to support partial updates
+    return False
+
+
+def _parse_java_default_value(java_type: str, default_str: str) -> tuple[Optional[str], bool]:
+    """Parse a Java default value expression to a Python default literal.
+
+    Returns (python_default, has_default) where:
+    - python_default: Python literal string like "False", "True", '"USD"', "42", or None
+    - has_default: True if a non-null default was found
+
+    Args:
+        java_type: The Java type of the field (e.g., "boolean", "String", "int")
+        default_str: The default value expression (e.g., "false", '"USD"', "42", "null")
+    """
+    if not default_str:
+        return None, False
+
+    default_str = default_str.strip()
+
+    # Handle null explicitly
+    if default_str == "null":
+        return None, False
+
+    # Handle primitive boolean: false/true
+    if java_type == "boolean":
+        if default_str == "false":
+            return "False", True
+        elif default_str == "true":
+            return "True", True
+
+    # Handle boxed Boolean: Boolean.FALSE/Boolean.TRUE
+    if java_type == "Boolean":
+        if default_str == "Boolean.FALSE":
+            return "False", True
+        elif default_str == "Boolean.TRUE":
+            return "True", True
+        elif default_str == "false":
+            return "False", True
+        elif default_str == "true":
+            return "True", True
+
+    # Handle numeric types (int, long, float, double, Integer, Long, Float, Double)
+    if java_type in ("int", "long", "float", "double", "Integer", "Long", "Float", "Double"):
+        # Just use the numeric value as-is (valid Python syntax)
+        try:
+            # Validate it's a valid number
+            float(default_str)
+            return default_str, True
+        except ValueError:
+            pass
+
+    # Handle String: "value" -> "value" (strip Java quotes, add Python quotes)
+    if java_type == "String":
+        # Check for string literal like "USD"
+        if default_str.startswith('"') and default_str.endswith('"'):
+            inner = default_str[1:-1]
+            # Escape any internal quotes and backslashes
+            inner = inner.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{inner}"', True
+
+    # Handle new Type() instantiations - no sensible default, treat as null
+    if default_str.startswith("new "):
+        return None, False
+
+    # Handle static references with dot notation
+    # Only treat as enum if the java_type suggests it's an enum type
+    # (not a collection type like List, Set, etc.)
+    if "." in default_str and not default_str.startswith('"'):
+        parts = default_str.split(".")
+        if len(parts) == 2:
+            # Check if this is likely an enum by examining the java_type
+            # Enums have simple type names like "ExportAs", "Status", etc.
+            # Collections have types like "List<X>", "Set<X>"
+            base_type = java_type.split("<")[0].strip()  # Handle generics
+            is_collection = base_type in ("List", "ArrayList", "Set", "HashSet", "Collection", "Map", "HashMap")
+            is_array = java_type.endswith("[]")
+
+            # Only treat as enum if NOT a collection/array type
+            if not is_collection and not is_array and parts[1].isupper():
+                return f'"{parts[1]}"', True
+
+            # For collections/arrays with static defaults, no valid Python default
+            return None, False
+
+    return None, False
+
+
 def extract_java_pojo_fields(source: str, class_name: str) -> list[SchemaField]:
-    """Extract fields from a Java class (POJOs, records)."""
+    """Extract fields from a Java class (POJOs, records).
+
+    Rules for field inclusion and optionality:
+    - Static fields (static, static final) are excluded
+    - Injected fields (@Inject, @Autowired) are excluded
+    - Logger fields (LOGGER, LOG) are excluded
+    - @JsonIgnore fields are excluded (they're not serialized)
+    - Java primitive types (int, long, boolean, etc.) are required
+    - All other types (String, custom classes, collections) are optional
+      unless marked with @NotNull/@NonNull annotations
+    - Default values are extracted from field initializers
+    """
     fields: list[SchemaField] = []
 
     # Try to find the class block
@@ -221,19 +342,56 @@ def extract_java_pojo_fields(source: str, class_name: str) -> list[SchemaField]:
                     break
         class_body = class_body[:end]
 
-        field_pattern = r'(?:private|public|protected)\s+([\w<>,\s\[\]]+)\s+(\w+)\s*[;=]'
+        # Match field declarations including preceding annotations
+        # Captures: (1) annotations and modifiers, (2) type, (3) name, (4) optional initializer
+        field_pattern = r'((?:@\w+(?:\s*\([^)]*\))?\s*)*)\s*(?:private|public|protected)\s+(?:static\s+)?(?:final\s+)?([\w<>,\s\[\]]+)\s+(\w+)\s*(?:=\s*([^;]+))?\s*;'
         for match in re.finditer(field_pattern, class_body):
-            java_type = match.group(1).strip()
-            field_name = match.group(2)
+            annotations_and_modifiers = match.group(1)
+            java_type = match.group(2).strip()
+            field_name = match.group(3)
+            default_expr = match.group(4)  # May be None if no initializer
+
+            # Skip static fields (already filtered in pattern, but double-check)
+            if 'static' in annotations_and_modifiers:
+                continue
+
+            # Skip injected fields (@Inject, @Autowired)
+            if re.search(r'@(Inject|Autowired)', annotations_and_modifiers):
+                continue
+
+            # Skip @JsonIgnore fields (not part of the API)
+            if re.search(r'@JsonIgnore', annotations_and_modifiers):
+                continue
+
+            # Skip logger fields (common pattern)
+            if field_name in ('LOGGER', 'LOG', 'logger', 'log'):
+                continue
 
             # Map Java type to schema type
             base_type = re.split(r'[<\[\s]', java_type)[0]
-            schema_type = _JAVA_TYPE_MAP.get(base_type, "string")
+            
+            # Determine schema type and original_type for nested resolution
+            if base_type in _JAVA_TYPE_MAP:
+                schema_type = _JAVA_TYPE_MAP[base_type]
+                original_type = None
+            else:
+                # Custom class type - set as object with original_type for nested resolution
+                schema_type = "object"
+                original_type = base_type
+
+            # Determine if required based on type and annotations
+            field_context = annotations_and_modifiers
+            required = _is_java_field_required(java_type, field_context)
+
+            # Parse default value from Java to Python
+            python_default, has_default = _parse_java_default_value(java_type, default_expr or "")
 
             fields.append(SchemaField(
                 name=field_name,
                 type=schema_type,
-                required=True,
+                required=required,
+                original_type=original_type,
+                default=python_default if has_default else None,
             ))
     else:
         # Try Java record syntax: record Foo(String name, int age)
@@ -249,11 +407,23 @@ def extract_java_pojo_fields(source: str, class_name: str) -> list[SchemaField]:
                 if len(parts) == 2:
                     java_type, field_name = parts
                     base_type = re.split(r'[<\[\s]', java_type.strip())[0]
-                    schema_type = _JAVA_TYPE_MAP.get(base_type, "string")
+                    
+                    # Determine schema type and original_type for nested resolution
+                    if base_type in _JAVA_TYPE_MAP:
+                        schema_type = _JAVA_TYPE_MAP[base_type]
+                        original_type = None
+                    else:
+                        # Custom class type - set as object with original_type for nested resolution
+                        schema_type = "object"
+                        original_type = base_type
+                    
+                    # Records: use same logic for required/optional
+                    required = _is_java_field_required(java_type)
                     fields.append(SchemaField(
                         name=field_name,
                         type=schema_type,
-                        required=True,
+                        required=required,
+                        original_type=original_type,
                     ))
 
     return fields

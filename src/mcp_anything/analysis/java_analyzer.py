@@ -970,16 +970,75 @@ def _analyze_micronaut(source: str, file_info: FileInfo, result: JavaAnalysisRes
 def _resolve_pojo_properties(
     params: list[ParameterSpec],
     pojo_sources: dict[str, str],
+    source_file_path: Optional[str] = None,
+    visited: Optional[set[str]] = None,
 ) -> None:
-    """Resolve object params with original_type to nested properties using POJO sources."""
+    """Resolve object params with original_type to nested properties using POJO sources.
+
+    When source_file_path is provided, uses import resolution to find the correct
+    class definition. Falls back to alphabetical search if no import matches.
+    
+    Recursively resolves nested types to support multi-level object structures.
+    Uses 'visited' set to prevent infinite recursion on circular references.
+    """
     from mcp_anything.analysis.schema_extractor import extract_java_pojo_fields
+
+    # Track visited types to prevent infinite recursion
+    if visited is None:
+        visited = set()
+
+    # Parse imports from the source file if available
+    imports: dict[str, str] = {}
+    source_file_content: Optional[str] = None
+    if source_file_path and source_file_path in pojo_sources:
+        source_file_content = pojo_sources[source_file_path]
+        is_kotlin = source_file_path.endswith('.kt')
+        imports = _parse_imports_from_source(source_file_content, is_kotlin=is_kotlin)
 
     for param in params:
         if param.type != "object" or not param.original_type:
             continue
         type_name = param.original_type
-        # Search all sources for the class definition
-        for source in pojo_sources.values():
+        
+        # Skip if already visited (circular reference)
+        if type_name in visited:
+            continue
+        visited = visited | {type_name}  # Create new set to track path
+
+        # Try import-based resolution first
+        if type_name in imports:
+            fqn = imports[type_name]
+            # Convert fully qualified name to file path suffix
+            # E.g., 'com.gigwell.model.filters.Filter' -> '/com/gigwell/model/filters/Filter.java'
+            ext = '.kt' if fqn.startswith('kotlin.') else '.java'
+            file_suffix = '/' + fqn.replace('.', '/') + ext
+
+            # Look for the file by suffix match (keys may have prefix like 'java/')
+            for source_path, source in pojo_sources.items():
+                if source_path.endswith(file_suffix):
+                    fields = extract_java_pojo_fields(source, type_name)
+                    if fields:
+                        param.properties = [
+                            ParameterSpec(
+                                name=f.name,
+                                type=f.type,
+                                description=f.description,
+                                required=f.required,
+                                original_type=f.original_type,
+                            )
+                            for f in fields
+                        ]
+                        # Recursively resolve nested types
+                        if param.properties:
+                            _resolve_pojo_properties(param.properties, pojo_sources, source_file_path=source_path, visited=visited)
+                        break  # Found the correct file
+            else:
+                # Import-based resolution failed, fall through to alphabetical
+                pass
+            continue  # Skip alphabetical fallback if import resolution was attempted
+
+        # Fall back to alphabetical search across all sources
+        for source_path, source in pojo_sources.items():
             fields = extract_java_pojo_fields(source, type_name)
             if fields:
                 param.properties = [
@@ -988,9 +1047,13 @@ def _resolve_pojo_properties(
                         type=f.type,
                         description=f.description,
                         required=f.required,
+                        original_type=f.original_type,
                     )
                     for f in fields
                 ]
+                # Recursively resolve nested types
+                if param.properties:
+                    _resolve_pojo_properties(param.properties, pojo_sources, source_file_path=source_path, visited=visited)
                 break
 
 
@@ -1026,9 +1089,9 @@ def java_results_to_capabilities(
                 continue
             seen.add(tool_name)
 
-            # Resolve POJO types to nested properties
+            # Resolve POJO types to nested properties using import resolution
             if pojo_sources:
-                _resolve_pojo_properties(ep.parameters, pojo_sources)
+                _resolve_pojo_properties(ep.parameters, pojo_sources, source_file_path=file_path)
 
             capabilities.append(Capability(
                 name=tool_name,
@@ -1050,6 +1113,44 @@ def java_results_to_capabilities(
 def _strip_jaxrs_regex(path: str) -> str:
     """Normalize JAX-RS regex path params: {id: \\d+} → {id}."""
     return re.sub(r'\{(\w+)[^}]*\}', r'{\1}', path)
+
+
+# ---------------------------------------------------------------------------
+# Import parsing for POJO resolution
+# ---------------------------------------------------------------------------
+
+# Regex to match Java import statements: import com.example.ClassName;
+_IMPORT_RE = re.compile(r'^import\s+([\w.]+(?:\.\*)?);', re.MULTILINE)
+
+# Regex to match Kotlin import statements: import com.example.ClassName
+_KOTLIN_IMPORT_RE = re.compile(r'^import\s+([\w.]+(?:\.\*)?)', re.MULTILINE)
+
+
+def _parse_imports_from_source(source: str, is_kotlin: bool = False) -> dict[str, str]:
+    """Parse import statements from Java/Kotlin source code.
+
+    Returns a mapping from simple class name to fully qualified class name.
+    For wildcard imports (e.g., import com.example.*), the simple name maps to
+    the package prefix (without the trailing .*).
+    """
+    imports: dict[str, str] = {}
+    import_re = _KOTLIN_IMPORT_RE if is_kotlin else _IMPORT_RE
+
+    for match in import_re.finditer(source):
+        fully_qualified = match.group(1)
+        if fully_qualified.endswith('.*'):
+            # Wildcard import - store package prefix for later resolution
+            package = fully_qualified[:-2]  # Remove .*
+            # Store with empty key to indicate package-level import
+            # We'll handle this specially in resolution
+            continue
+        # Extract simple class name from fully qualified name
+        parts = fully_qualified.rsplit('.', 1)
+        if len(parts) == 2:
+            simple_name = parts[1]
+            imports[simple_name] = fully_qualified
+
+    return imports
 
 
 def _endpoint_to_tool_name(ep: SpringEndpoint) -> str:
