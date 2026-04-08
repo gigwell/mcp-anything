@@ -59,6 +59,7 @@ from mcp_anything.analysis.zustand_analyzer import (
     detect_zustand_import_path,
     zustand_results_to_capabilities,
 )
+from mcp_anything.analysis.type_registry import TypeRegistry, TypeRegistryConfig
 from mcp_anything.analysis.llm_analyzer import llm_analyze
 from mcp_anything.analysis.scanner import scan_codebase
 from mcp_anything.models.analysis import (
@@ -422,6 +423,37 @@ class AnalyzePhase(Phase):
                 "protocol": IPCType.PROTOCOL,
             }
             result.primary_ipc = backend_map.get(ctx.options.backend, result.primary_ipc)
+
+        # === TYPE REGISTRY INTEGRATION ===
+        # Build type registry from scanned codebase for nested type resolution
+        if result.capabilities and any(f.language in (Language.JAVA, Language.KOTLIN) for f in files):
+            console.print("    Building type registry...")
+            registry_config = TypeRegistryConfig(
+                max_depth=5,
+                exclude_patterns=["**/test/**", "**/Test*.kt", "**/*Test.java"]
+            )
+            registry = TypeRegistry(registry_config)
+            
+            # Detect primary language for scanning
+            detected_language = Language.JAVA if any(
+                f.language in (Language.JAVA, Language.KOTLIN) for f in files
+            ) else Language.OTHER
+            
+            if detected_language == Language.JAVA:
+                registry.scan_directory(root, Language.JAVA)
+                
+                # Resolve all parameter types
+                param_count = sum(len(c.parameters) for c in result.capabilities if c.parameters)
+                if param_count > 0:
+                    console.print(f"    Resolving {param_count} parameters...")
+                    for cap in result.capabilities:
+                        if cap.parameters:
+                            cap.parameters = registry.resolve_all_parameters(cap.parameters)
+                    
+                    # Store registry in context for design phase
+                    ctx.type_registry = registry
+                    console.print(f"    Type registry complete: {registry.get_type_count()} types resolved")
+        # === END TYPE REGISTRY INTEGRATION ===
 
         ctx.manifest.analysis = result
 
